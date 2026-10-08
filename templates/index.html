@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Sales Dashboard with Filters & Drill-Down</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="navbar">
+        <h1>AdventureWorks Analytics Portal</h1>
+    </header>
+
+    <main class="dashboard-container">
+        <!-- Filter & Slicer Control Panel -->
+        <section class="slicers-section">
+            <div class="slicer-group">
+                <label for="yearFilter">Year Slicer:</label>
+                <select id="yearFilter" onchange="applyFilters()">
+                    <option value="all">All Years</option>
+                </select>
+            </div>
+            <div class="slicer-group">
+                <label for="categoryFilter">Category Slicer:</label>
+                <select id="categoryFilter" onchange="applyFilters()">
+                    <option value="all">All Categories</option>
+                </select>
+            </div>
+            <button class="reset-btn" onclick="resetFilters()">Reset Slicers</button>
+        </section>
+
+        <!-- KPI Summary Cards Banner -->
+        <section class="kpi-banner">
+            <div class="kpi-card">
+                <h3>Total Revenue</h3>
+                <p id="kpiTotalSales">$0.00</p>
+            </div>
+            <div class="kpi-card">
+                <h3>Total Order Quantity</h3>
+                <p id="kpiTotalOrders">0</p>
+            </div>
+        </section>
+
+        <!-- Native Power BI Report Embedded via Secure Frame -->
+        <section class="pbi-embed-section">
+            <h2>Native Power BI Enterprise Report</h2>
+            <div class="iframe-container">
+                <iframe 
+                    title="AdventureWorks Report" 
+                    src="https://app.powerbi.com/reportEmbed?reportId=YOUR_REPORT_ID&autoAuth=true" 
+                    width="100%" 
+                    height="450px" 
+                    frameborder="0" 
+                    allowFullScreen="true">
+                </iframe>
+            </div>
+        </section>
+
+        <!-- 4 Interactive ECharts Grid -->
+        <div class="chart-grid">
+            <div class="chart-card"><div id="barChart" class="chart-box"></div></div>
+            <div class="chart-card"><div id="lineChart" class="chart-box"></div></div>
+            <div class="chart-card"><div id="pieChart" class="chart-box"></div></div>
+            <div class="chart-card"><div id="areaChart" class="chart-box"></div></div>
+        </div>
+
+        <!-- Drill-Down Detail Table Section -->
+        <section class="drilldown-section">
+            <h3 id="drillDownTitle">Drill-Down View: Top Products</h3>
+            <div class="table-container">
+                <table id="drillDownTable">
+                    <thead>
+                        <tr>
+                            <th>Product Name</th>
+                            <th>Total Sales ($)</th>
+                            <th>Order Quantity</th>
+                        </tr>
+                    </thead>
+                    <tbody id="drillDownTableBody">
+                        <tr><td colspan="3" style="text-align: center;">Click a chart element or select a filter to inspect granular details.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const barChart = echarts.init(document.getElementById('barChart'));
+        const lineChart = echarts.init(document.getElementById('lineChart'));
+        const pieChart = echarts.init(document.getElementById('pieChart'));
+        const areaChart = echarts.init(document.getElementById('areaChart'));
+
+        let globalFilterOptions = { years: [], categories: [] };
+
+        async function fetchDashboardData(year = 'all', category = 'all') {
+            try {
+                const response = await httpGet(`http://localhost:5000/api/sales-data?year=${year}&category=${category}`);
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    // Populate KPI values
+                    document.getElementById('kpiTotalSales').innerText = `$${result.kpis.total_sales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                    document.getElementById('kpiTotalOrders').innerText = result.kpis.total_orders.toLocaleString();
+
+                    // Populate Slicers if first load or options changed
+                    populateSlicers(result.filter_options);
+
+                    const annualData = result.annual_sales_summary;
+                    const categoryData = result.category_distribution;
+                    const monthlyData = result.monthly_breakdown;
+                    const drillData = result.drill_down_data;
+
+                    // 1. Bar Chart
+                    barChart.setOption({
+                        title: { text: 'Sales by Year (Click to Drill-Down)', textStyle: { fontSize: 13 }, left: 'center' },
+                        tooltip: { trigger: 'axis' },
+                        xAxis: { type: 'category', data: annualData.map(r => r.calendar_year) },
+                        yAxis: { type: 'value', name: 'Sales ($)' },
+                        series: [{ data: annualData.map(r => r.total_sales), type: 'bar', itemStyle: { color: '#3b82f6' }, borderRadius: 4 }]
+                    });
+
+                    // 2. Line Chart
+                    lineChart.setOption({
+                        title: { text: 'Monthly Revenue Trend', textStyle: { fontSize: 13 }, left: 'center' },
+                        tooltip: { trigger: 'axis' },
+                        xAxis: { type: 'category', data: monthlyData.map(m => m.month) },
+                        yAxis: { type: 'value' },
+                        series: [{ data: monthlyData.map(m => m.total_sales), type: 'line', smooth: true, itemStyle: { color: '#10b981' } }]
+                    });
+
+                    // 3. Pie Chart
+                    pieChart.setOption({
+                        title: { text: 'Sales Share by Category (Click to Filter)', textStyle: { fontSize: 13 }, left: 'center' },
+                        tooltip: { trigger: 'item', formatter: '{b}: ${c} ({d}%)' },
+                        legend: { orient: 'horizontal', bottom: '0%', left: 'center', textStyle: { fontSize: 11 } },
+                        series: [{
+                            name: 'Category Sales',
+                            type: 'pie',
+                            radius: ['35%', '65%'],
+                            center: ['50%', '45%'],
+                            data: categoryData.map(c => ({ value: Number(c.sales_amount) || 0, name: String(c.category_name || 'Unknown') }))
+                        }]
+                    });
+
+                    // 4. Area Chart
+                    areaChart.setOption({
+                        title: { text: 'Order Quantity Growth', textStyle: { fontSize: 13 }, left: 'center' },
+                        tooltip: { trigger: 'axis' },
+                        xAxis: { type: 'category', data: annualData.map(r => r.calendar_year) },
+                        yAxis: { type: 'value' },
+                        series: [{ data: annualData.map(r => r.total_orders), type: 'line', areaStyle: { color: '#bfdbfe' }, itemStyle: { color: '#2563eb' }, smooth: true }]
+                    });
+
+                    // Populate Drill-Down Table
+                    renderDrillDownTable(drillData);
+                }
+            } catch (err) {
+                console.error('Failed to fetch dashboard data:', err);
+            }
+        }
+
+        async function httpGet(url) {
+            return await fetch(url);
+        }
+
+        function populateSlicers(options) {
+            const yearSelect = document.getElementById('yearFilter');
+            const catSelect = document.getElementById('categoryFilter');
+
+            if (yearSelect.options.length <= 1 && options.years) {
+                options.years.forEach(yr => {
+                    let opt = document.createElement('option');
+                    opt.value = yr;
+                    opt.textContent = yr;
+                    yearSelect.appendChild(opt);
+                });
+            }
+
+            if (catSelect.options.length <= 1 && options.categories) {
+                options.categories.forEach(cat => {
+                    let opt = document.createElement('option');
+                    opt.value = cat;
+                    opt.textContent = cat;
+                    catSelect.appendChild(opt);
+                });
+            }
+        }
+
+        function applyFilters() {
+            const selectedYear = document.getElementById('yearFilter').value;
+            const selectedCat = document.getElementById('categoryFilter').value;
+            fetchDashboardData(selectedYear, selectedCat);
+        }
+
+        function resetFilters() {
+            document.getElementById('yearFilter').value = 'all';
+            document.getElementById('categoryFilter').value = 'all';
+            fetchDashboardData('all', 'all');
+        }
+
+        function renderDrillDownTable(data) {
+            const tbody = document.getElementById('drillDownTableBody');
+            tbody.innerHTML = '';
+            if (!data || data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center;">No records found for current filter selection.</td></tr>';
+                return;
+            }
+            data.forEach(row => {
+                // Fallback checks for different casing variations from serialization
+                const productName = row.product_name || row.ProductName || row.productName || 'Unknown Product';
+                const totalSales = row.total_sales || row.Total_Sales || row.totalSales || 0;
+                const totalOrders = row.total_orders || row.Total_Orders || row.totalOrders || 0;
+
+                let tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${productName}</td>
+                    <td>$${Number(totalSales).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${Number(totalOrders).toLocaleString()}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Drill-Down / Drill-Up Click Interactivity on Pie Chart
+        pieChart.on('click', function(params) {
+            if (params.name) {
+                document.getElementById('categoryFilter').value = params.name;
+                applyFilters();
+            }
+        });
+
+        // Bind click event listener to barChart for year cross-filtering
+        barChart.on('click', function(params) {
+            if (params.name) {
+                document.getElementById('yearFilter').value = params.name;
+                applyFilters();
+            }
+        });
+
+        // Initial Load
+        window.addEventListener('DOMContentLoaded', () => {
+            fetchDashboardData();
+        });
+
+        window.addEventListener('resize', () => {
+            barChart.resize(); lineChart.resize(); pieChart.resize(); areaChart.resize();
+        });
+    </script>
+</body>
+</html>
